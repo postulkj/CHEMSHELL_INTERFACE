@@ -1,0 +1,194 @@
+#!/bin/bash
+
+#ChemShell
+export TCLROOT=/usr/local/programs/custom/chemshell/tcl8.5.19/unix/build/
+export PATH=/usr/local/programs/custom/chemshell/tcl8.5.19/unix/build/bin:$PATH
+export LD_LIBRARY_PATH=/usr/local/programs/custom/chemshell/tcl8.5.19/unix/build/lib:$LD_LIBRARY_PATH
+export LIBTCL=/usr/local/programs/custom/chemshell/tcl8.5.19/unix/build/lib/libtcl8.5.so
+export PATH=/usr/local/programs/custom/chemshell/chemsh-tcl-3.7.1/bin:$PATH
+export TCLLIBPATH=/usr/local/programs/custom/chemshell/chemsh-tcl-3.7.1/tcl
+export PATH=/usr/local/programs/custom/chemshell/chemsh-tcl-3.7.1/scripts:$PATH
+
+#ORCA
+source ../SetEnvironment.sh ORCA
+
+
+cd CHEMSH
+timestep=$1
+ibead=$2
+input=input$ibead
+natom=$(wc -l ../geom.dat.$ibead) && natom=$(echo "${natom%% *}")
+geometry=../geom.dat.$ibead
+
+
+#################### USER INPUT #######################
+# !!! You need to define the force field correctly in ff.dat so the QMMM simulation works well.
+QMatom=10               # Number of QM atoms
+functional="b3lyp"      # QM method
+basis="cc-pVDZ"     
+charge=0
+mult=1
+#################### END OF USER INPUT ################
+
+echo $natom > input.xyz
+echo '' >> input.xyz
+cat $geometry >> input.xyz
+geometry=input.xyz
+
+
+############ DL_POLY INPUT  ###################
+
+dl_defs="{ mm_defs=ff.dat mxlist=10000 use_pairlist=no conn=geom.c} "
+
+if [ $timestep -eq 0 ]; then
+cat > ff.dat << EOF
+query ox "COO oxygen"
+supergroup o
+target o
+atom c
+connect 1 2
+endquery
+
+query hn "NH hydrogen"
+supergroup h
+target h
+atom n
+connect 1 2
+endquery
+
+query cx "COO carbon"
+supergroup c
+target c
+atom o
+connect 1 2
+endquery
+
+query ca "alpha carbon"
+supergroup c
+target c
+atom n
+connect 1 2
+endquery
+
+query ha "alpha hydrogen"
+supergroup h
+target h
+atom c
+connect 1 2
+endquery
+
+
+charge o -.82
+charge h +.41
+vdw  o o  625.502 629327.0
+vdw  o h  0.0 0.0
+bond h  o     1059.162 1.012
+angle h o h   75.90 113.24
+
+vdw  ox ox 0.0 0.0
+vdw o ox 594.5906557 489121.8274
+vdw o cx 854.4262302 1429197.364
+vdw o ca 550.8168067 749091.9796
+vdw o n 707.8372152 770738.9488
+vdw o ha 135.6293897 67219.86945
+vdw o hn 0.0 0.0
+
+EOF
+cat > geom.com << EOF
+
+read_xyz file=$geometry coords=geom.c
+
+EOF
+inner_atoms=$(seq  -s " " 1 $QMatom)
+
+cat > $input.com << EOF
+eandg energy=e gradient=g coords=geom.c \
+    theory= hybrid : { coupling=shift
+    qm_region= { $inner_atoms }
+    qm_theory=orca: { executable=/home/postulka/program/orca_5_0_3/orca version=5.0 hamiltonian=dft charge=$charge mult=$mult functional=$functional basis=$basis }
+    mm_theory=dl_poly : {$dl_defs}
+    }
+
+EOF
+
+fi
+
+############ END OF DL_POLY INPUT #####################
+inner_atoms=$(seq  -s " " 1 $QMatom)
+
+chemsh -s --no-xml-output  >& geom.com.out <geom.com
+
+#Save connectivity in the first step and use it throughout the simulation
+if [[ -f connectivity.dat ]]; then
+  head -n $( echo "$natom + 4" | bc ) geom.c > geom.dat  
+  cat connectivity.dat >> geom.dat                                                                                                                                 
+  mv geom.dat geom.c
+else
+  if [[ $timestep -ne 0 ]]; then
+    echo "WARNING: connectivity.dat not found. Using current geom.c as new connectivity file."
+  fi
+  tail -n+$( echo "$natom + 5" | bc ) geom.c >> connectivity.dat
+fi
+
+#################### Launch ChemShell ####################
+
+chemsh.x $input.com > $input.com.out
+
+if [[ $? -eq 1 ]];then
+    echo "Error in ChemShell. Check $input.com.out"
+elif $( grep -q grep 'error code 1' $input.com.out ) ;then
+    echo "Error in QM code."
+else
+    cp $input.com.out $input.com.out.old
+    cp g g.old
+    cp e e.old
+fi
+
+##########################################################
+
+#################### get energies and gradient ###############
+
+nwrite=$(awk -F"[! ,=\"']+" '{if($1=="nwrite")print $2}' ../input.in)
+pom=$(echo $timestep % $nwrite | bc)
+if [ $timestep -eq 1 ] && [ $nwrite -ne 1 ]; then
+        printf "Step \t Potential \t  Kinetic \t Total\n" >> ../energiesQMMM.dat
+elif [ $nwrite -eq 1 ]; then
+        if [ $timestep -eq 0 ]; then
+                printf "Step \t PotentialQMMM \t PotentialMM \t PotentialQM \t  Kinetic \t Total\n" >> ../energiesQMMM.dat
+        elif [ $timestep -eq 1 ]; then
+        grep 'QM/MM Energy' $input.com.out | awk '{ print $3 }'  > QMMMenergy.dat
+        grep 'energy from' $input.com.out | grep 'dl_poly' | awk '{ print $6 }' > MMenergy.dat
+        grep 'energy from' input001.com.out | grep 'mndo' | awk '{ print $6 }' > QMenergy.dat
+        else
+        QMMM_pot_energy=$(cat QMMMenergy.dat)
+        MM_pot_energy=$(cat MMenergy.dat)
+        QM_pot_energy=$(cat QMenergy.dat)
+            Ekin=$(awk '{ print $3}' ../energies.dat | tail -1)
+            QMMM_tot_energy=$(echo $QMMM_pot_energy + $Ekin | bc)
+        laststep=$(echo $timestep - 1 | bc)
+        printf " $laststep \t $QMMM_pot_energy \t $MM_pot_energy \t $QM_pot_energy \t $Ekin \t $QMMM_tot_energy\n" >> ../energiesQMMM.dat
+        grep 'QM/MM Energy' $input.com.out | awk '{ print $3 }' > QMMMenergy.dat
+        grep 'energy from' $input.com.out | grep 'dl_poly' | awk '{ print $6 }' > MMenergy.dat
+        grep 'energy from' input001.com.out | grep 'mndo' | awk '{ print $6 }' > QMenergy.dat
+        fi
+else
+        if [ $pom -eq 1 ]; then
+        QMMM_pot_energy=$(cat QMMMenergy.dat)
+        MM_pot_energy=$(cat MMenergy.dat)
+        QM_pot_energy=$(cat QMenergy.dat)
+            Ekin=$(awk '{ print $3}' ../energies.dat | tail -1)
+            QMMM_tot_energy=$(echo $QMMM_pot_energy + $Ekin | bc)
+        laststep=$(echo $timestep - 1 | bc)
+        printf " $laststep \t $QMMM_pot_energy \t $MM_pot_energy \t $QM_pot_energy \t  $Ekin \t $QMMM_tot_energy\n" >> ../energiesQMMM.dat
+        elif [ $pom -eq 0 ]; then
+        grep 'QM/MM Energy' $input.com.out | awk '{ print $3 }' > QMMMenergy.dat
+        grep 'energy from' $input.com.out | grep 'dl_poly' | awk '{ print $6 }' > MMenergy.dat
+        grep 'energy from' input001.com.out | grep 'mndo' | awk '{ print $6 }' > QMenergy.dat
+        fi
+
+fi
+
+
+tail -1 e >> ../engrad.dat.$ibead
+paste <(sed -n '5~3p' g) <(sed -n '6~3p' g) <(sed -n '7~3p' g) >> ../engrad.dat.$ibead
+

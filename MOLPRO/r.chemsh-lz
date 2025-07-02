@@ -1,0 +1,247 @@
+#!/bin/bash
+
+
+
+#ChemShell
+export TCLROOT=/usr/local/programs/custom/chemshell/tcl8.5.19/unix/build/
+export PATH=/usr/local/programs/custom/chemshell/tcl8.5.19/unix/build/bin:$PATH
+export LD_LIBRARY_PATH=/usr/local/programs/custom/chemshell/tcl8.5.19/unix/build/lib:$LD_LIBRARY_PATH
+export LIBTCL=/usr/local/programs/custom/chemshell/tcl8.5.19/unix/build/lib/libtcl8.5.so
+export PATH=/usr/local/programs/custom/chemshell/chemsh-tcl-3.7.1/bin:$PATH
+export TCLLIBPATH=/usr/local/programs/custom/chemshell/chemsh-tcl-3.7.1/tcl
+export PATH=/usr/local/programs/custom/chemshell/chemsh-tcl-3.7.1/scripts:$PATH
+
+
+
+
+#MOLPRO
+export PATH=/usr/local/programs/common/molpro/molpro2012.1.11/arch/x86_64-intel_12.0.5.220/molpros_2012_1_Linux_x86_64_i8/bin/:$PATH
+
+
+###############################################################
+
+cd CHEMSH-LZ
+timestep=$1
+ibead=$2
+input=input$ibead
+natom=$(wc -l ../geom.dat.$ibead | awk '{print $1}') #Number of atoms (both QM and MM)
+pspace=$(cat pspace.setup)
+
+geometry=../geom.dat.$ibead
+echo $natom > input.xyz
+echo '' >> input.xyz
+cat $geometry >> input.xyz
+geometry=input.xyz
+
+#----USER INPUT--------------------------
+QMatom=4
+extra_con=0
+basis="6-31g*" # for Pople basis sets and df-casscf, fitting DF basis must be specified manually
+               # don't use Dunning basis sets, you won't get NACME
+nelectrons=18  # total number of electrons
+spin=0         # 0 for singlet, 1 for dublet etc.
+nocc=11        # occupied orbitals
+nclosed=6      # closed orbitals
+memory=1200      # molpro memory in MegaWords (1MW = 8 Mb)
+method="casscf"  
+################delscratch=1   # If job fails, try to delete scratch and start over without initial wavefunction
+################numerforce=1   # How do we calculate forces?
+# 0 = Analytically
+# 1 = Numerically in case analytical calculation do not converge
+# 2 = Always numerically # FOR NUMERICAL FORCES,you may want to try -mppx parallelization, see MX_12 script
+
+#############################-END OF USER INPUT, FOR SIMPLE CASSCF, NO OTHER MODIFICATION NEEDED
+
+
+# reading from state.dat
+# Number of states,state we are on and how many singlets to compute
+read -t 2 -a nstate
+read -t 2 -a tocalc
+###################### DL_POLY ###################################
+dl_defs="{ mm_defs=ff.dat mxlist=10000 use_pairlist=no conn=geom.c} " 
+
+
+################### CHEMSH input ######################
+cat > geom.com << EOF
+
+read_xyz file=$geometry coords=geom.c
+
+EOF
+
+chemsh -s --no-xml-output  >& geom.com.out <geom.com
+
+natom4=`expr $natom + 4`
+connectNUM=` expr $[$natom - $QMatom] / 3 \* 2 + $extra_con`
+count=`expr $QMatom + 1`
+mv geom.c pom.dat
+head -n $natom4 pom.dat >> geom.c
+echo "block = connectivity records = $connectNUM" >> geom.c
+while [ $count -le $natom ]; do
+        h1=`expr $count + 1`
+        h2=`expr $count + 2`
+	echo "$count $h1" >> geom.c
+	echo "$count $h2" >> geom.c
+        count=`expr $count + 3`
+
+done
+rm pom.dat
+
+
+cat > molpro.com << EOF
+***,molpro
+memory,$memory,m
+file,2,molpro.wfu,unknown
+data,truncate,2,5100
+data,truncate,2,701
+orient,noorient
+symmetry,nosym
+geometry=molpro.geometry
+lattice,in.lat,out.lat
+basis={
+basis $basis
+}
+if (lastorb.ne.MCSCF)then
+rhf,maxit=40
+endif
+{mcscf,gradient=1.d-2,step=1.d-3
+orbital,IGNORE_ERROR;
+maxiter,40,1000
+occ,$nocc
+closed,$nclosed
+noextra
+pspace,$pspace
+wf,18,0,0
+state,$nstate
+ORBITAL,2140.2;
+save,5100.2;
+}
+{rs2,mix=$nstate,root=$tocalc;state,$nstate;
+orbital,IGNORE_ERROR;
+maxiter,40,1000
+noexc;}
+text,ChemShell energy
+show[5,5f20.12], energy
+clear,_TROV
+force
+
+EOF
+
+cat > $input.com << EOF
+
+read_input ff.dat {    
+
+query ox "QM oxygen"
+supergroup o
+target o
+atom o
+connect 1 2
+endquery
+
+query hx "QM hydrogen"
+supergroup h
+target h
+atom ox
+connect 1 2
+endquery
+
+charge o -.82
+charge h +.41
+vdw  o o  625.502 629327.0 
+vdw  o h  0.0 0.0
+vdw  h h  0.0 0.0
+vdw  hx o 0.286009 0.39473
+vdw  ox ox 0.0 0.0
+vdw  ox o 1402.413 855114.5
+bond h  o     1059.162 1.012
+angle h o h   75.90 113.24
+}
+
+
+
+
+eandg { energy=e gradient=g coords=geom.c \
+    theory= hybrid : { coupling=shift
+	qm_region= {1 2 3 4}
+	qm_theory=molpro: {executable={molpro -s -I /tmp/$USER/${JOB_ID} -d /tmp/$USER/${JOB_ID} -W $PWD/scratch  --no-xml-output}  read_control=yes wfu_file=molpro.wfu memory=$memory basis=$basis hamiltonian=$method  mcscf_occ=$nocc mcscf_closed=$nclosed  mcscf_wf={$nelectrons 0 0} symmetry=no maxcyc=40 mcscf_nroot=$nstate mcscf_target=$tocalc}  
+	mm_theory=dl_poly : $dl_defs
+    }
+    }
+
+EOF
+############# End of ChemShell input #################
+#################### Launch ChemShell ####################
+chemsh -s --no-xml-output  >& $input.com.out <$input.com
+
+
+st=1
+while [ $st -eq 1 ]; do
+psp=$(grep 'pspace,' molpro.com )
+psp=$(echo ${psp:7})
+        if $( grep -q 'GLOBAL ERROR fehler' molpro.out ) ;then
+                pom1=`echo "$psp == 0.4" | bc`
+                pom2=`echo "$psp == 1" | bc`
+                pom3=`echo "$psp == 5" | bc`
+                pom4=`echo "$psp == 20" | bc`
+
+		echo $timestep >> pspace.log
+                if [ $pom1 -eq 1 ]; then
+                        echo '1' > pspace.setup
+                        sed 's/pspace,0.4/pspace,1/g' molpro.com > molpro.com.2
+                        mv molpro.com.2 molpro.com
+                        chemsh -s --no-xml-output  >& $input.com.out <$input.com
+
+                elif [ $pom2 -eq 1 ]; then
+                        echo '5' > pspace.setup
+                        sed 's/pspace,1/pspace,5/g' molpro.com > molpro.com.2
+                        mv molpro.com.2 molpro.com
+                        chemsh -s --no-xml-output  >& $input.com.out <$input.com
+
+                elif [ $pom3 -eq 1 ]; then
+                        echo '20' > pspace.setup
+                        sed 's/pspace,5/pspace,20/g' molpro.com > molpro.com.2
+                        mv molpro.com.2 molpro.com
+                        chemsh -s --no-xml-output  >& $input.com.out <$input.com
+
+                elif [ $pom4 -eq 1 ]; then
+                        echo '100' > pspace.setup
+                        sed 's/pspace,20/pspace,100/g' molpro.com > molpro.com.2
+                        mv molpro.com.2 molpro.com
+                        chemsh -s --no-xml-output  >& $input.com.out <$input.com
+
+                else
+                        st=0
+                fi
+
+                cp $input.com.out $input.com.out.old
+                cp molpro.out molpro.out.old
+
+        else
+                st=0
+        fi
+done
+
+
+
+
+#######Ziskani sil a energii###############
+natom3=` expr $natom \* 3 `
+
+#- Extracting energy. This should work even for CASPT2 energies. 
+#from molpro output, Chemshell writes just one state
+
+MMenergy=$(grep 'dl_poly:' input001.com.out | awk '{print $6}')
+for i in `seq $nstate`; do
+        QMenergy=$(echo $(grep 'MCSCF' molpro.out| grep 'Energy' | awk -F "Energy" '{print $2}' | tail -n $nstate | head -n $i | tail -n 1))
+        QMMMenergy$i=$(echo "$QMenergy+$MMenergy" | bc)
+        echo $QMenergy >> ../engrad.dat.$ibead
+done
+
+echo " $timestep   $(grep 'QM/MM Energy' input001.com.out | awk '{ print $3 }') " >> ../QMMMenergy.dat
+
+
+tail -n $natom3 g | xargs -n 3 >> ../engrad.dat.$ibead
+
+
+cp molpro.out molpro.out.old.$timestep
+cp input001.com.out input001.com.out.old
+
