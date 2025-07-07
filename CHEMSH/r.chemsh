@@ -1,17 +1,17 @@
 #!/bin/bash
 
 #ChemShell
-export TCLROOT=/usr/local/programs/custom/chemshell/tcl8.5.19/unix/build/
-export PATH=/usr/local/programs/custom/chemshell/tcl8.5.19/unix/build/bin:$PATH
-export LD_LIBRARY_PATH=/usr/local/programs/custom/chemshell/tcl8.5.19/unix/build/lib:$LD_LIBRARY_PATH
-export LIBTCL=/usr/local/programs/custom/chemshell/tcl8.5.19/unix/build/lib/libtcl8.5.so
-export PATH=/usr/local/programs/custom/chemshell/chemsh-tcl-3.7.1/bin:$PATH
-export TCLLIBPATH=/usr/local/programs/custom/chemshell/chemsh-tcl-3.7.1/tcl
-export PATH=/usr/local/programs/custom/chemshell/chemsh-tcl-3.7.1/scripts:$PATH
+export LIBTCL=/home/postulka/programs/chemshell/tcl8.5.19/lib/libtcl8.5.so
+export PATH=/home/postulka/programs/chemshell/tcl8.5.19/bin:$PATH
+export PATH=/home/postulka/programs/chemshell/chemsh-tcl-3.7.1-int8/scripts:$PATH
+export PATH=/home/postulka/programs/chemshell/chemsh-tcl-3.7.1-int8/bin:$PATH
+export TCLROOT=/home/postulka/programs/chemshell/tcl8.5.19/build
+export TCLLIBPATH=/home/postulka/programs/chemshell/chemsh-tcl-3.7.1-int8/tcl
+export LD_LIBRARY_PATH=/home/postulka/programs/chemshell/tcl8.5.19/build/lib:$LD_LIBRARY_PATH
 
-#ORCA
-source ../SetEnvironment.sh ORCA
-
+#MNDO
+export PATH=/usr/local/programs/custom/mndo/mndo99/:$PATH
+source SetEnvironment.sh ORCA 5.0.3
 
 cd CHEMSH
 timestep=$1
@@ -22,90 +22,69 @@ geometry=../geom.dat.$ibead
 
 
 #################### USER INPUT #######################
-# !!! You need to define the force field correctly in ff.dat so the QMMM simulation works well.
-QMatom=10               # Number of QM atoms
-functional="b3lyp"      # QM method
+QMatom=24           # Number of QM atoms
+extra_con=0      # Extra conectivity entries 
+hamiltonian="pbe"      # QM method
 basis="cc-pVDZ"     
 charge=0
 mult=1
+embedding="shift"   i   #shift for electrostatic embedding
+types_qm_atoms="nx nx cx cx cx cx cx cx cx hx hx hx hx hx cx cx cx cx cx hx hx hx hx hx"
+#qm_theory="mndo: { executable={mndo99} hamiltonian=pm3 }"
+qm_theory="orca: { executable=$ORCAEXE version=5.0 hamiltonian=dft charge=$charge mult=$mult functional=$hamiltonian basis=$basis }"
 #################### END OF USER INPUT ################
 
 echo $natom > input.xyz
 echo '' >> input.xyz
 cat $geometry >> input.xyz
 geometry=input.xyz
-
+MMatom=$( echo "$natom-$QMatom" | bc )
 
 ############ DL_POLY INPUT  ###################
 
-dl_defs="{ mm_defs=ff.dat mxlist=10000 use_pairlist=no conn=geom.c} "
+dl_defs="{ mm_defs=ff.dat mxlist=10000 use_pairlist=no conn=geom.c atom_types= { $types_qm_atoms $(for atom in $(tail -$MMatom $geometry | awk '{print $1}'); do echo -n "${atom,,} "; done) } } "
 
 if [ $timestep -eq 0 ]; then
 cat > ff.dat << EOF
-query ox "COO oxygen"
-supergroup o
-target o
-atom c
-connect 1 2
-endquery
+declare cx
+declare nx
+declare hx
 
-query hn "NH hydrogen"
-supergroup h
-target h
-atom n
-connect 1 2
-endquery
+charge  c   +.145
+charge  h   +.04
+charge  o   -.683
+charge  ho  +.418
+charge  n   -.460
 
-query cx "COO carbon"
-supergroup c
-target c
-atom o
-connect 1 2
-endquery
+vdw     c c     485.30       892114.23
+vdw     h h     29.30        7152.56
+vdw     o o     627.24       578580.84
+vdw     ho ho   0.0          0.0
+vdw     n  n    801.33       944298.39
 
-query ca "alpha carbon"
-supergroup c
-target c
-atom n
-connect 1 2
-endquery
-
-query ha "alpha hydrogen"
-supergroup h
-target h
-atom c
-connect 1 2
-endquery
-
-
-charge o -.82
-charge h +.41
-vdw  o o  625.502 629327.0
-vdw  o h  0.0 0.0
-bond h  o     1059.162 1.012
-angle h o h   75.90 113.24
-
-vdw  ox ox 0.0 0.0
-vdw o ox 594.5906557 489121.8274
-vdw o cx 854.4262302 1429197.364
-vdw o ca 550.8168067 749091.9796
-vdw o n 707.8372152 770738.9488
-vdw o ha 135.6293897 67219.86945
-vdw o hn 0.0 0.0
-
+vdw     cx h     119.29    79880.53
+vdw     cx ho     119.29    79880.53
+vdw     cx o     551.73    718442.90
+vdw     nx o     708.96    739156.92
+vdw     nx h     153.22    82183.63
+vdw     nx ho     153.22    82183.63
+vdw     nx c     623.61    917835.52
+vdw     hx h     29.30        7152.56
+vdw     hx ho     29.30        7152.56
+vdw     hx c     119.29    79880.53
+vdw     hx o     135.56    64329.87
 EOF
 cat > geom.com << EOF
 
 read_xyz file=$geometry coords=geom.c
 
 EOF
-inner_atoms=$(seq  -s " " 1 $QMatom)
 
 cat > $input.com << EOF
 eandg energy=e gradient=g coords=geom.c \
-    theory= hybrid : { coupling=shift
-    qm_region= { $inner_atoms }
-    qm_theory=orca: { executable=/home/postulka/program/orca_5_0_3/orca version=5.0 hamiltonian=dft charge=$charge mult=$mult functional=$functional basis=$basis }
+    theory= hybrid : { coupling=$embedding
+    qm_region= { $(seq  -s " " 1 $QMatom) }
+    qm_theory=$qm_theory
     mm_theory=dl_poly : {$dl_defs}
     }
 
@@ -114,20 +93,28 @@ EOF
 fi
 
 ############ END OF DL_POLY INPUT #####################
-inner_atoms=$(seq  -s " " 1 $QMatom)
 
 chemsh -s --no-xml-output  >& geom.com.out <geom.com
 
-#Save connectivity in the first step and use it throughout the simulation
-if [[ -f connectivity.dat ]]; then
-  head -n $( echo "$natom + 4" | bc ) geom.c > geom.dat  
-  cat connectivity.dat >> geom.dat                                                                                                                                 
-  mv geom.dat geom.c
+natom4=`expr $natom + 4`
+connectNUM=` expr $[$natom - $QMatom] / 6 \* 5 + $extra_con`
+count=`expr $QMatom + 1`
+mv geom.c pom.dat
+head -n $natom4 pom.dat >> geom.c
+if [ $timestep -eq 0 ]; then
+echo "block = connectivity records = $connectNUM" > conn.dat
+while [ $count -le $natom ]; do
+        echo "$count $(echo "$count+1" | bc)" >> conn.dat
+        echo "$count $(echo "$count+2" | bc)" >> conn.dat
+        echo "$count $(echo "$count+3" | bc)" >> conn.dat
+        echo "$count $(echo "$count+4" | bc)" >> conn.dat
+        echo "$(echo "$count+1" | bc) $(echo "$count+5" | bc)" >> conn.dat
+        count=`expr $count + 6`
+
+done
+cat conn.dat >> geom.c
 else
-  if [[ $timestep -ne 0 ]]; then
-    echo "WARNING: connectivity.dat not found. Using current geom.c as new connectivity file."
-  fi
-  tail -n+$( echo "$natom + 5" | bc ) geom.c >> connectivity.dat
+cat conn.dat >> geom.c
 fi
 
 #################### Launch ChemShell ####################
