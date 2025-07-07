@@ -10,7 +10,7 @@ export TCLLIBPATH=/home/postulka/programs/chemshell/chemsh-tcl-3.7.1-int8/tcl
 export LD_LIBRARY_PATH=/home/postulka/programs/chemshell/tcl8.5.19/build/lib:$LD_LIBRARY_PATH
 
 #MNDO
-export PATH=/usr/local/programs/custom/mndo/mndo99/:$PATH
+source SetEnvironment.sh MNDO
 source SetEnvironment.sh ORCA 5.0.3
 
 cd CHEMSH
@@ -22,33 +22,41 @@ geometry=../geom.dat.$ibead
 
 
 #################### USER INPUT #######################
-QMatom=24           # Number of QM atoms
-extra_con=0      # Extra conectivity entries 
-hamiltonian="pbe"      # QM method
+QMatom=24               # Number of QM atoms
+extra_con=0             # Extra conectivity entries 
+hamiltonian="pbe"       # QM method
 basis="cc-pVDZ"     
 charge=0
 mult=1
 embedding="shift"   i   #shift for electrostatic embedding
 types_qm_atoms="nx nx cx cx cx cx cx cx cx hx hx hx hx hx cx cx cx cx cx hx hx hx hx hx"
-#qm_theory="mndo: { executable={mndo99} hamiltonian=pm3 }"
-qm_theory="orca: { executable=$ORCAEXE version=5.0 hamiltonian=dft charge=$charge mult=$mult functional=$hamiltonian basis=$basis }"
+types_mm_atoms="c o h h h ho"
+qm_theory="mndo: { executable=$MNDOEXE hamiltonian=$hamiltonian charge=$charge mult=$mult }"
+#qm_theory="orca: { executable=$ORCAEXE version=5.0 hamiltonian=dft charge=$charge mult=$mult functional=$hamiltonian basis=$basis }"
 #################### END OF USER INPUT ################
+##################### NON-BONDED PARAMETERS FOR QM ATOMS ######################
+# Every row represents one atom type and its epsilon and sigma parameters.
+# Here units of kJ/mol and nm are expected.
+# These parameters will be transformed and added to dl_poly input file ff.dat. Pair rules will be applied on them and on those found in ff.dat.
+cat > non_bonded.dat << EOF
+nx 0.71128  0.325
+cx 0.276144 0.35
+hx 0.12552  0.25
+EOF
 
 echo $natom > input.xyz
 echo '' >> input.xyz
 cat $geometry >> input.xyz
 geometry=input.xyz
 MMatom=$( echo "$natom-$QMatom" | bc )
-
 ############ DL_POLY INPUT  ###################
-
-dl_defs="{ mm_defs=ff.dat mxlist=10000 use_pairlist=no conn=geom.c atom_types= { $types_qm_atoms $(for atom in $(tail -$MMatom $geometry | awk '{print $1}'); do echo -n "${atom,,} "; done) } } "
 
 if [ $timestep -eq 0 ]; then
 cat > ff.dat << EOF
 declare cx
 declare nx
 declare hx
+declare ho
 
 charge  c   +.145
 charge  h   +.04
@@ -74,6 +82,53 @@ vdw     hx ho     29.30        7152.56
 vdw     hx c     119.29    79880.53
 vdw     hx o     135.56    64329.87
 EOF
+
+# Transform non-bonded parameters to dl_poly format
+while read -r line; do
+    atom_type=$(echo $line | awk '{print $1}')
+    epsilon=$(echo $line | awk '{print $2}')
+    sigma=$(echo $line | awk '{print $3}')
+    sigma_angstrom=$(echo "$sigma * 10" | bc)
+    epsilon_kcal=$(echo "$epsilon / 4.184" | bc -l)
+    c6=$(echo "$epsilon_kcal * 4 * $sigma_angstrom^6" | bc -l)
+    c12=$(echo "$c6 * $sigma_angstrom^6" | bc -l)
+    echo "vdw $atom_type $atom_type $c6 $c12" >> ff.dat
+done < non_bonded.dat
+
+# Extracting type, c6 and c12 parameters form ff.dat from "vdw atom1 atom2" only if atom1=atom2.
+types_atoms_all=$(awk '/^vdw/ && $2 == $3 {print $2}' ff.dat)
+# Loop through types_atoms_all to get from ff.dat c6 and c12 and produce pair vdw terms as geometric average.
+while read -r atom_type; do
+    while read -r atom_type2; do
+        if [ "$atom_type" = "$atom_type2" ]; then
+            continue
+        fi
+        c6_1=$(awk -v type="$atom_type" '$1 == "vdw" && $2 == type && $3 == type {print $4}' ff.dat)
+        c12_1=$(awk -v type="$atom_type" '$1 == "vdw" && $2 == type && $3 == type {print $5}' ff.dat)
+        c6_2=$(awk -v type="$atom_type2" '$1 == "vdw" && $2 == type && $3 == type {print $4}' ff.dat)
+        c12_2=$(awk -v type="$atom_type2" '$1 == "vdw" && $2 == type && $3 == type {print $5}' ff.dat)
+        c6=$(echo "scale=10; sqrt($c6_1 * $c6_2)" | bc -l)
+        c12=$(echo "scale=10; sqrt($c12_1 * $c12_2)" | bc -l)
+        echo "vdw $atom_type $atom_type2 $c6 $c12" >> ff.dat
+    done <<< $types_atoms_all
+done <<< "$types_atoms_all"
+
+
+# This defines parameters for MM calculation and most importantly atom types as combination types_qm_atoms and types from geometry file.
+# Alternatively atom types can be defined as types_qm_atoms and a multiplication of types_mm_atoms.
+if [ -z "$types_mm_atoms" ]; then
+    # Count number of residue form MMatom and length ov types_mm_atoms_all
+    length_residue=$(echo $types_mm_atoms | wc -w)
+    nresidue=$(echo $MMatom / $length_residue | bc)
+    # Create types_mm_atoms_all as a repetition of types_mm_atoms_all
+    types_mm_atoms=$(for i in $(seq 1 $nresidue); do echo -n "$types_mm_atoms "; done)
+else
+    types_mm_atoms_all=$(for atom in $(tail -$MMatom $geometry | awk '{print $1}'); do echo -n "${atom,      ,} "; done)
+fi
+
+dl_defs="{ mm_defs=ff.dat mxlist=10000 use_pairlist=no conn=geom.c atom_types= { $types_qm_atoms $types_mm_atoms_all } } " 
+
+
 cat > geom.com << EOF
 
 read_xyz file=$geometry coords=geom.c
