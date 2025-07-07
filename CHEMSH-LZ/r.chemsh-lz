@@ -1,7 +1,5 @@
 #!/bin/bash
 
-
-
 #ChemShell
 export TCLROOT=/usr/local/programs/custom/chemshell/tcl8.5.19/unix/build/
 export PATH=/usr/local/programs/custom/chemshell/tcl8.5.19/unix/build/bin:$PATH
@@ -11,12 +9,8 @@ export PATH=/usr/local/programs/custom/chemshell/chemsh-tcl-3.7.1/bin:$PATH
 export TCLLIBPATH=/usr/local/programs/custom/chemshell/chemsh-tcl-3.7.1/tcl
 export PATH=/usr/local/programs/custom/chemshell/chemsh-tcl-3.7.1/scripts:$PATH
 
-
-
-
 #MOLPRO
-export PATH=/usr/local/programs/common/molpro/molpro2012.1.11/arch/x86_64-intel_12.0.5.220/molpros_2012_1_Linux_x86_64_i8/bin/:$PATH
-
+source SetEnvironment.sh MOLPRO
 
 ###############################################################
 
@@ -33,9 +27,9 @@ echo '' >> input.xyz
 cat $geometry >> input.xyz
 geometry=input.xyz
 
-#----USER INPUT--------------------------
-QMatom=4
-extra_con=0
+######### USER INPUT ##########################
+QMatom=4       # Number of QM atoms
+extra_con=0    # Extra conectivity entries
 basis="6-31g*" # for Pople basis sets and df-casscf, fitting DF basis must be specified manually
                # don't use Dunning basis sets, you won't get NACME
 nelectrons=18  # total number of electrons
@@ -44,13 +38,12 @@ nocc=11        # occupied orbitals
 nclosed=6      # closed orbitals
 memory=1200      # molpro memory in MegaWords (1MW = 8 Mb)
 method="casscf"  
-################delscratch=1   # If job fails, try to delete scratch and start over without initial wavefunction
-################numerforce=1   # How do we calculate forces?
-# 0 = Analytically
-# 1 = Numerically in case analytical calculation do not converge
-# 2 = Always numerically # FOR NUMERICAL FORCES,you may want to try -mppx parallelization, see MX_12 script
+embedding="shift" #shift for electrostatic embedding
 
-#############################-END OF USER INPUT, FOR SIMPLE CASSCF, NO OTHER MODIFICATION NEEDED
+types_qm_atoms="ox ox hx hx" # types of QM atoms, must be in the same order as in geometry file
+#qm_theory=molpro: {executable={molpro -s -I /tmp/$USER/${JOB_ID} -d /tmp/$USER/${JOB_ID} -W $PWD/scratch  --no-xml-output}  read_control=yes wfu_file=molpro.wfu memory=$memo      ry basis=$basis hamiltonian=$method  mcscf_occ=$nocc mcscf_closed=$nclosed  mcscf_wf={$nelectrons 0 0} symmetry=no maxcyc=40 mcscf_nroot=$nstate mcscf_target=$tocalc}
+qm_theory="molpro: {executable={molpro -s -I /tmp/$USER/${JOB_ID} -d /tmp/$USER/${JOB_ID} -W $PWD/scratch --no-xml-output}  read_control=yes}"
+############################# END OF USER INPUT ########################
 
 
 # reading from state.dat
@@ -58,7 +51,7 @@ method="casscf"
 read -t 2 -a nstate
 read -t 2 -a tocalc
 ###################### DL_POLY ###################################
-dl_defs="{ mm_defs=ff.dat mxlist=10000 use_pairlist=no conn=geom.c} " 
+dl_defs="{ mm_defs=ff.dat mxlist=10000 use_pairlist=no conn=geom.c atom_types= { $types_qm_atoms $(for atom in $(tail -$MMatom $geometry | awk '{print $1}'); do echo -n "${atom,,} "; done) }} " 
 
 
 ################### CHEMSH input ######################
@@ -104,19 +97,16 @@ if (lastorb.ne.MCSCF)then
 rhf,maxit=40
 endif
 {mcscf,gradient=1.d-2,step=1.d-3
-orbital,IGNORE_ERROR;
 maxiter,40,1000
 occ,$nocc
 closed,$nclosed
-noextra
 pspace,$pspace
-wf,18,0,0
+wf,$nelectrons,0,0
 state,$nstate
 ORBITAL,2140.2;
 save,5100.2;
 }
 {rs2,mix=$nstate,root=$tocalc;state,$nstate;
-orbital,IGNORE_ERROR;
 maxiter,40,1000
 noexc;}
 text,ChemShell energy
@@ -130,19 +120,8 @@ cat > $input.com << EOF
 
 read_input ff.dat {    
 
-query ox "QM oxygen"
-supergroup o
-target o
-atom o
-connect 1 2
-endquery
-
-query hx "QM hydrogen"
-supergroup h
-target h
-atom ox
-connect 1 2
-endquery
+declare ox
+declare hx
 
 charge o -.82
 charge h +.41
@@ -156,13 +135,10 @@ bond h  o     1059.162 1.012
 angle h o h   75.90 113.24
 }
 
-
-
-
 eandg { energy=e gradient=g coords=geom.c \
-    theory= hybrid : { coupling=shift
-	qm_region= {1 2 3 4}
-	qm_theory=molpro: {executable={molpro -s -I /tmp/$USER/${JOB_ID} -d /tmp/$USER/${JOB_ID} -W $PWD/scratch  --no-xml-output}  read_control=yes wfu_file=molpro.wfu memory=$memory basis=$basis hamiltonian=$method  mcscf_occ=$nocc mcscf_closed=$nclosed  mcscf_wf={$nelectrons 0 0} symmetry=no maxcyc=40 mcscf_nroot=$nstate mcscf_target=$tocalc}  
+    theory= hybrid : { coupling=$embedding \
+	qm_region= {$(seq  -s " " 1 $QMatom)}
+	qm_theory=$qm_theory  
 	mm_theory=dl_poly : $dl_defs
     }
     }
@@ -192,7 +168,7 @@ psp=$(echo ${psp:7})
 
                 elif [ $pom2 -eq 1 ]; then
                         echo '5' > pspace.setup
-                        sed 's/pspace,1/pspace,5/g' molpro.com > molpro.com.2
+                       sed 's/pspace,1/pspace,5/g' molpro.com > molpro.com.2
                         mv molpro.com.2 molpro.com
                         chemsh -s --no-xml-output  >& $input.com.out <$input.com
 
@@ -239,9 +215,8 @@ done
 echo " $timestep   $(grep 'QM/MM Energy' input001.com.out | awk '{ print $3 }') " >> ../QMMMenergy.dat
 
 
-tail -n $natom3 g | xargs -n 3 >> ../engrad.dat.$ibead
+paste <(sed -n '5~3p' g) <(sed -n '6~3p' g) <(sed -n '7~3p' g) >> ../engrad.dat.$ibead
 
 
-cp molpro.out molpro.out.old.$timestep
-cp input001.com.out input001.com.out.old
+
 
