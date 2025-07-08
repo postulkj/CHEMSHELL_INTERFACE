@@ -33,7 +33,7 @@ types_qm_atoms="nx nx cx cx cx cx cx cx cx hx hx hx hx hx cx cx cx cx cx hx hx h
 types_mm_atoms="c o h h h ho"
 qm_theory="mndo: { executable=$MNDOEXE hamiltonian=$hamiltonian charge=$charge mult=$mult }"
 #qm_theory="orca: { executable=$ORCAEXE version=5.0 hamiltonian=dft charge=$charge mult=$mult functional=$hamiltonian basis=$basis }"
-#################### END OF USER INPUT ################
+
 ##################### NON-BONDED PARAMETERS FOR QM ATOMS ######################
 # Every row represents one atom type and its epsilon and sigma parameters.
 # Here units of kJ/mol and nm are expected.
@@ -44,6 +44,13 @@ cx 0.276144 0.35
 hx 0.12552  0.25
 EOF
 
+#################### END OF USER INPUT ################
+
+# Get unique types for both sets
+readarray -t unique_qm_types < <(echo "$types_qm_atoms" | tr ' ' '\n' | awk '!x[$0]++')
+readarray -t unique_mm_types < <(echo "$types_mm_atoms" | tr ' ' '\n' | awk '!x[$0]++')
+
+
 echo $natom > input.xyz
 echo '' >> input.xyz
 cat $geometry >> input.xyz
@@ -51,12 +58,12 @@ geometry=input.xyz
 MMatom=$( echo "$natom-$QMatom" | bc )
 ############ DL_POLY INPUT  ###################
 
-if [ $timestep -eq 0 ]; then
-cat > ff.dat << EOF
-declare cx
-declare nx
-declare hx
-declare ho
+if [ ! -f ff.dat ]; then
+for qm_type in "${unique_qm_types[@]}"; do
+    echo "declare $qm_type" >> ff.dat
+done
+
+cat >> ff.dat << EOF
 
 charge  c   +.145
 charge  h   +.04
@@ -69,13 +76,6 @@ vdw     h h     29.30        7152.56
 vdw     o o     627.24       578580.84
 vdw     ho ho   0.0          0.0
 vdw     n  n    801.33       944298.39
-
-vdw     cx cx    1000.0     999788.0
-vdw     hx h     29.30        7152.56
-vdw     hx ho     29.30        7152.56
-vdw     hx c     119.29    79880.53
-vdw     hx o     135.56    64329.87
-
 EOF
 
 # Transform non-bonded parameters to dl_poly format
@@ -87,28 +87,21 @@ while read -r line; do
     epsilon_kcal=$(echo "$epsilon / 4.184" | bc -l)
     c6=$(echo "$epsilon_kcal * 4 * $sigma_angstrom^6" | bc -l)
     c12=$(echo "$c6 * $sigma_angstrom^6" | bc -l)
-    echo "vdw $atom_type $atom_type $c6 $c12" >> ff.dat
+    echo "vdw $atom_type $atom_type $c6 $c12" >> qm_non-bonded.dat
 done < non_bonded.dat
 
-
-# Get unique types for both sets
-readarray -t unique_qm_types < <(echo "$types_qm_atoms" | tr ' ' '\n' | awk '!x[$0]++')
-readarray -t unique_mm_types < <(echo "$types_mm_atoms" | tr ' ' '\n' | awk '!x[$0]++')
-
-output_file="ff_pairs.dat"
-> "$output_file"
 
 for mm_type in "${unique_mm_types[@]}"; do
     for qm_type in "${unique_qm_types[@]}"; do
         # Example: retrieve c6 and c12 for each type (replace with your actual code/logic)
         c6_mm=$(awk -v type="$mm_type" '$1 == "vdw" && $2 == type && $3 == type {print $4}' ff.dat)
         c12_mm=$(awk -v type="$mm_type" '$1 == "vdw" && $2 == type && $3 == type {print $5}' ff.dat)
-        c6_qm=$(awk -v type="$qm_type" '$1 == "vdw" && $2 == type && $3 == type {print $4}' ff.dat)
-        c12_qm=$(awk -v type="$qm_type" '$1 == "vdw" && $2 == type && $3 == type {print $5}' ff.dat)
+        c6_qm=$(awk -v type="$qm_type" '$1 == "vdw" && $2 == type && $3 == type {print $4}' qm_non-bonded.dat)
+        c12_qm=$(awk -v type="$qm_type" '$1 == "vdw" && $2 == type && $3 == type {print $5}' qm_non-bonded.dat)
         if [[ -n "$c6_mm" && -n "$c6_qm" && -n "$c12_mm" && -n "$c12_qm" ]]; then
             c6=$(echo "scale=10; sqrt($c6_mm * $c6_qm)" | bc -l)
             c12=$(echo "scale=10; sqrt($c12_mm * $c12_qm)" | bc -l)
-            echo "vdw $mm_type $qm_type $c6 $c12" >> "$output_file"
+            LC_NUMERIC=C printf "vdw %s %s %.4f %.4f\n" "$mm_type" "$qm_type" "$c6" "$c12" >> ff.dat
         fi
     done
 done
