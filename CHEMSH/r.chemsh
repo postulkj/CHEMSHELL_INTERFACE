@@ -24,11 +24,11 @@ geometry=../geom.dat.$ibead
 #################### USER INPUT #######################
 QMatom=24               # Number of QM atoms
 extra_con=0             # Extra conectivity entries 
-hamiltonian="pbe"       # QM method
+hamiltonian="pm3"       # QM method
 basis="cc-pVDZ"     
 charge=0
 mult=1
-embedding="shift"   i   #shift for electrostatic embedding
+embedding="shift"       #shift for electrostatic embedding
 types_qm_atoms="nx nx cx cx cx cx cx cx cx hx hx hx hx hx cx cx cx cx cx hx hx hx hx hx"
 types_mm_atoms="c o h h h ho"
 qm_theory="mndo: { executable=$MNDOEXE hamiltonian=$hamiltonian charge=$charge mult=$mult }"
@@ -70,17 +70,12 @@ vdw     o o     627.24       578580.84
 vdw     ho ho   0.0          0.0
 vdw     n  n    801.33       944298.39
 
-vdw     cx h     119.29    79880.53
-vdw     cx ho     119.29    79880.53
-vdw     cx o     551.73    718442.90
-vdw     nx o     708.96    739156.92
-vdw     nx h     153.22    82183.63
-vdw     nx ho     153.22    82183.63
-vdw     nx c     623.61    917835.52
+vdw     cx cx    1000.0     999788.0
 vdw     hx h     29.30        7152.56
 vdw     hx ho     29.30        7152.56
 vdw     hx c     119.29    79880.53
 vdw     hx o     135.56    64329.87
+
 EOF
 
 # Transform non-bonded parameters to dl_poly format
@@ -95,33 +90,37 @@ while read -r line; do
     echo "vdw $atom_type $atom_type $c6 $c12" >> ff.dat
 done < non_bonded.dat
 
-# Extracting type, c6 and c12 parameters form ff.dat from "vdw atom1 atom2" only if atom1=atom2.
-types_atoms_all=$(awk '/^vdw/ && $2 == $3 {print $2}' ff.dat)
-# Loop through types_atoms_all to get from ff.dat c6 and c12 and produce pair vdw terms as geometric average.
-while read -r atom_type; do
-    while read -r atom_type2; do
-        if [ "$atom_type" = "$atom_type2" ]; then
-            continue
-        fi
-        c6_1=$(awk -v type="$atom_type" '$1 == "vdw" && $2 == type && $3 == type {print $4}' ff.dat)
-        c12_1=$(awk -v type="$atom_type" '$1 == "vdw" && $2 == type && $3 == type {print $5}' ff.dat)
-        c6_2=$(awk -v type="$atom_type2" '$1 == "vdw" && $2 == type && $3 == type {print $4}' ff.dat)
-        c12_2=$(awk -v type="$atom_type2" '$1 == "vdw" && $2 == type && $3 == type {print $5}' ff.dat)
-        c6=$(echo "scale=10; sqrt($c6_1 * $c6_2)" | bc -l)
-        c12=$(echo "scale=10; sqrt($c12_1 * $c12_2)" | bc -l)
-        echo "vdw $atom_type $atom_type2 $c6 $c12" >> ff.dat
-    done <<< $types_atoms_all
-done <<< "$types_atoms_all"
 
+# Get unique types for both sets
+readarray -t unique_qm_types < <(echo "$types_qm_atoms" | tr ' ' '\n' | awk '!x[$0]++')
+readarray -t unique_mm_types < <(echo "$types_mm_atoms" | tr ' ' '\n' | awk '!x[$0]++')
+
+output_file="ff_pairs.dat"
+> "$output_file"
+
+for mm_type in "${unique_mm_types[@]}"; do
+    for qm_type in "${unique_qm_types[@]}"; do
+        # Example: retrieve c6 and c12 for each type (replace with your actual code/logic)
+        c6_mm=$(awk -v type="$mm_type" '$1 == "vdw" && $2 == type && $3 == type {print $4}' ff.dat)
+        c12_mm=$(awk -v type="$mm_type" '$1 == "vdw" && $2 == type && $3 == type {print $5}' ff.dat)
+        c6_qm=$(awk -v type="$qm_type" '$1 == "vdw" && $2 == type && $3 == type {print $4}' ff.dat)
+        c12_qm=$(awk -v type="$qm_type" '$1 == "vdw" && $2 == type && $3 == type {print $5}' ff.dat)
+        if [[ -n "$c6_mm" && -n "$c6_qm" && -n "$c12_mm" && -n "$c12_qm" ]]; then
+            c6=$(echo "scale=10; sqrt($c6_mm * $c6_qm)" | bc -l)
+            c12=$(echo "scale=10; sqrt($c12_mm * $c12_qm)" | bc -l)
+            echo "vdw $mm_type $qm_type $c6 $c12" >> "$output_file"
+        fi
+    done
+done
 
 # This defines parameters for MM calculation and most importantly atom types as combination types_qm_atoms and types from geometry file.
 # Alternatively atom types can be defined as types_qm_atoms and a multiplication of types_mm_atoms.
-if [ -z "$types_mm_atoms" ]; then
+if [ -n "$types_mm_atoms" ]; then
     # Count number of residue form MMatom and length ov types_mm_atoms_all
     length_residue=$(echo $types_mm_atoms | wc -w)
     nresidue=$(echo $MMatom / $length_residue | bc)
     # Create types_mm_atoms_all as a repetition of types_mm_atoms_all
-    types_mm_atoms=$(for i in $(seq 1 $nresidue); do echo -n "$types_mm_atoms "; done)
+    types_mm_atoms_all=$(for i in $(seq 1 $nresidue); do echo -n "$types_mm_atoms "; done)
 else
     types_mm_atoms_all=$(for atom in $(tail -$MMatom $geometry | awk '{print $1}'); do echo -n "${atom,      ,} "; done)
 fi
@@ -234,3 +233,6 @@ fi
 tail -1 e >> ../engrad.dat.$ibead
 paste <(sed -n '5~3p' g) <(sed -n '6~3p' g) <(sed -n '7~3p' g) >> ../engrad.dat.$ibead
 
+cp input001.com.out input001.com.out.$timestep
+cp mndo.out mndo.out.$timestep
+cp ../engrad.dat.$ibead engrad.dat.$timestep
