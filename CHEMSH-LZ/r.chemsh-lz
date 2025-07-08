@@ -12,23 +12,28 @@ export LD_LIBRARY_PATH=/home/postulka/programs/chemshell/tcl8.5.19/build/lib:$LD
 #MNDO
 source SetEnvironment.sh MNDO
 source SetEnvironment.sh ORCA 5.0.3
-source SetEnvironment.sh MOLPRO
+source SetEnvironment.sh MOLPRO 2024
 
-cd CHEMSH
+cd CHEMSH-LZ
 timestep=$1
 ibead=$2
 input=input$ibead
 natom=$(wc -l ../geom.dat.$ibead) && natom=$(echo "${natom%% *}")
 geometry=../geom.dat.$ibead
-
+read -t 2 -a nstate
+read -t 2 -a tocalc
 
 #################### USER INPUT #######################
-QMatom=24               # Number of QM atoms
+QMatom=4               # Number of QM atoms
 extra_con=0             # Extra conectivity entries 
-hamiltonian="pm3"       # QM method
-basis="cc-pVDZ"     
-charge=0
-mult=1
+nelectrons=18  # total number of electrons
+pspace=1
+spin=0         # 0 for singlet, 1 for dublet etc.
+nocc=11        # occupied orbitals
+nclosed=6      # closed orbitals
+memory=600      # molpro memory in MegaWords (1MW = 8 Mb)
+method="casscf"
+basis="6-31+g*"     
 embedding="shift"       #shift for electrostatic embedding
 types_qm_atoms="ox ox hx hx"
 types_mm_atoms="o h h"
@@ -81,7 +86,7 @@ maxiter,40,1000
 occ,$nocc
 closed,$nclosed
 pspace,$pspace
-wf,$nelectrons,0,0
+wf,$nelectrons,1,$spin
 state,$nstate
 ORBITAL,2140.2;
 save,5100.2;
