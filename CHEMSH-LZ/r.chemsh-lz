@@ -1,85 +1,65 @@
 #!/bin/bash
 
 #ChemShell
-export TCLROOT=/usr/local/programs/custom/chemshell/tcl8.5.19/unix/build/
-export PATH=/usr/local/programs/custom/chemshell/tcl8.5.19/unix/build/bin:$PATH
-export LD_LIBRARY_PATH=/usr/local/programs/custom/chemshell/tcl8.5.19/unix/build/lib:$LD_LIBRARY_PATH
-export LIBTCL=/usr/local/programs/custom/chemshell/tcl8.5.19/unix/build/lib/libtcl8.5.so
-export PATH=/usr/local/programs/custom/chemshell/chemsh-tcl-3.7.1/bin:$PATH
-export TCLLIBPATH=/usr/local/programs/custom/chemshell/chemsh-tcl-3.7.1/tcl
-export PATH=/usr/local/programs/custom/chemshell/chemsh-tcl-3.7.1/scripts:$PATH
+export LIBTCL=/home/postulka/programs/chemshell/tcl8.5.19/lib/libtcl8.5.so
+export PATH=/home/postulka/programs/chemshell/tcl8.5.19/bin:$PATH
+export PATH=/home/postulka/programs/chemshell/chemsh-tcl-3.7.1-int8/scripts:$PATH
+export PATH=/home/postulka/programs/chemshell/chemsh-tcl-3.7.1-int8/bin:$PATH
+export TCLROOT=/home/postulka/programs/chemshell/tcl8.5.19/build
+export TCLLIBPATH=/home/postulka/programs/chemshell/chemsh-tcl-3.7.1-int8/tcl
+export LD_LIBRARY_PATH=/home/postulka/programs/chemshell/tcl8.5.19/build/lib:$LD_LIBRARY_PATH
 
-#MOLPRO
+#MNDO
+source SetEnvironment.sh MNDO
+source SetEnvironment.sh ORCA 5.0.3
 source SetEnvironment.sh MOLPRO
 
-###############################################################
-
-cd CHEMSH-LZ
+cd CHEMSH
 timestep=$1
 ibead=$2
 input=input$ibead
-natom=$(wc -l ../geom.dat.$ibead | awk '{print $1}') #Number of atoms (both QM and MM)
-pspace=$(cat pspace.setup)
-
+natom=$(wc -l ../geom.dat.$ibead) && natom=$(echo "${natom%% *}")
 geometry=../geom.dat.$ibead
+
+
+#################### USER INPUT #######################
+QMatom=24               # Number of QM atoms
+extra_con=0             # Extra conectivity entries 
+hamiltonian="pm3"       # QM method
+basis="cc-pVDZ"     
+charge=0
+mult=1
+embedding="shift"       #shift for electrostatic embedding
+types_qm_atoms="ox ox hx hx"
+types_mm_atoms="o h h"
+#qm_theory="mndo: { executable=$MNDOEXE hamiltonian=$hamiltonian charge=$charge mult=$mult }"
+#qm_theory="orca: { executable=$ORCAEXE version=5.0 hamiltonian=dft charge=$charge mult=$mult functional=$hamiltonian basis=$basis }"
+qm_theory="molpro: {executable={$MOLPROEXE -s -I /tmp/$USER/${JOB_ID} -d /tmp/$USER/${JOB_ID} -W $PWD/scratch --no-xml-output}  read_control=yes}"
+
+##################### NON-BONDED PARAMETERS FOR QM ATOMS ######################
+# Every row represents one atom type and its epsilon and sigma parameters.
+# Here units of kJ/mol and nm are expected.
+# These parameters will be transformed and added to dl_poly input file ff.dat. Pair rules will be applied on them and on those found in ff.dat.
+cat > non_bonded.dat << EOF
+ox 2.4058  0.2912
+hx 0.527184 0.1852
+EOF
+
+#################### END OF USER INPUT ################
+
+# Get unique types for both sets
+readarray -t unique_qm_types < <(echo "$types_qm_atoms" | tr ' ' '\n' | awk '!x[$0]++')
+readarray -t unique_mm_types < <(echo "$types_mm_atoms" | tr ' ' '\n' | awk '!x[$0]++')
+
+
 echo $natom > input.xyz
 echo '' >> input.xyz
 cat $geometry >> input.xyz
 geometry=input.xyz
+MMatom=$( echo "$natom-$QMatom" | bc )
 
-######### USER INPUT ##########################
-QMatom=4       # Number of QM atoms
-extra_con=0    # Extra conectivity entries
-basis="6-31g*" # for Pople basis sets and df-casscf, fitting DF basis must be specified manually
-               # don't use Dunning basis sets, you won't get NACME
-nelectrons=18  # total number of electrons
-spin=0         # 0 for singlet, 1 for dublet etc.
-nocc=11        # occupied orbitals
-nclosed=6      # closed orbitals
-memory=1200      # molpro memory in MegaWords (1MW = 8 Mb)
-method="casscf"  
-embedding="shift" #shift for electrostatic embedding
-
-types_qm_atoms="ox ox hx hx" # types of QM atoms, must be in the same order as in geometry file
-#qm_theory=molpro: {executable={molpro -s -I /tmp/$USER/${JOB_ID} -d /tmp/$USER/${JOB_ID} -W $PWD/scratch  --no-xml-output}  read_control=yes wfu_file=molpro.wfu memory=$memo      ry basis=$basis hamiltonian=$method  mcscf_occ=$nocc mcscf_closed=$nclosed  mcscf_wf={$nelectrons 0 0} symmetry=no maxcyc=40 mcscf_nroot=$nstate mcscf_target=$tocalc}
-qm_theory="molpro: {executable={molpro -s -I /tmp/$USER/${JOB_ID} -d /tmp/$USER/${JOB_ID} -W $PWD/scratch --no-xml-output}  read_control=yes}"
-############################# END OF USER INPUT ########################
-
-
-# reading from state.dat
-# Number of states,state we are on and how many singlets to compute
-read -t 2 -a nstate
-read -t 2 -a tocalc
-###################### DL_POLY ###################################
-dl_defs="{ mm_defs=ff.dat mxlist=10000 use_pairlist=no conn=geom.c atom_types= { $types_qm_atoms $(for atom in $(tail -$MMatom $geometry | awk '{print $1}'); do echo -n "${atom,,} "; done) }} " 
-
-
-################### CHEMSH input ######################
-cat > geom.com << EOF
-
-read_xyz file=$geometry coords=geom.c
-
-EOF
-
-chemsh -s --no-xml-output  >& geom.com.out <geom.com
-
-natom4=`expr $natom + 4`
-connectNUM=` expr $[$natom - $QMatom] / 3 \* 2 + $extra_con`
-count=`expr $QMatom + 1`
-mv geom.c pom.dat
-head -n $natom4 pom.dat >> geom.c
-echo "block = connectivity records = $connectNUM" >> geom.c
-while [ $count -le $natom ]; do
-        h1=`expr $count + 1`
-        h2=`expr $count + 2`
-	echo "$count $h1" >> geom.c
-	echo "$count $h2" >> geom.c
-        count=`expr $count + 3`
-
-done
-rm pom.dat
-
-
+############### MOlPRO INPUT ####################
+if [ ! -f molpro.com ]; then
 cat > molpro.com << EOF
 ***,molpro
 memory,$memory,m
@@ -115,108 +95,139 @@ clear,_TROV
 force
 
 EOF
+fi
+################ END OF MOLPRO INPUT ####################
 
-cat > $input.com << EOF
+############ DL_POLY INPUT  ###################
 
-read_input ff.dat {    
+if [ ! -f ff.dat ]; then
+for qm_type in "${unique_qm_types[@]}"; do
+    echo "declare $qm_type" >> ff.dat
+done
 
-declare ox
-declare hx
-
+cat >> ff.dat << EOF
 charge o -.82
 charge h +.41
 vdw  o o  625.502 629327.0 
 vdw  o h  0.0 0.0
 vdw  h h  0.0 0.0
-vdw  hx o 0.286009 0.39473
-vdw  ox ox 0.0 0.0
-vdw  ox o 1402.413 855114.5
 bond h  o     1059.162 1.012
 angle h o h   75.90 113.24
-}
+EOF
 
-eandg { energy=e gradient=g coords=geom.c \
-    theory= hybrid : { coupling=$embedding \
-	qm_region= {$(seq  -s " " 1 $QMatom)}
-	qm_theory=$qm_theory  
-	mm_theory=dl_poly : $dl_defs
-    }
+# Transform non-bonded parameters to dl_poly format
+while read -r line; do
+    atom_type=$(echo $line | awk '{print $1}')
+    epsilon=$(echo $line | awk '{print $2}')
+    sigma=$(echo $line | awk '{print $3}')
+    sigma_angstrom=$(echo "$sigma * 10" | bc)
+    epsilon_kcal=$(echo "$epsilon / 4.184" | bc -l)
+    c6=$(echo "$epsilon_kcal * 4 * $sigma_angstrom^6" | bc -l)
+    c12=$(echo "$c6 * $sigma_angstrom^6" | bc -l)
+    echo "vdw $atom_type $atom_type $c6 $c12" >> qm_non-bonded.dat
+done < non_bonded.dat
+
+
+for mm_type in "${unique_mm_types[@]}"; do
+    for qm_type in "${unique_qm_types[@]}"; do
+        # Example: retrieve c6 and c12 for each type (replace with your actual code/logic)
+        c6_mm=$(awk -v type="$mm_type" '$1 == "vdw" && $2 == type && $3 == type {print $4}' ff.dat)
+        c12_mm=$(awk -v type="$mm_type" '$1 == "vdw" && $2 == type && $3 == type {print $5}' ff.dat)
+        c6_qm=$(awk -v type="$qm_type" '$1 == "vdw" && $2 == type && $3 == type {print $4}' qm_non-bonded.dat)
+        c12_qm=$(awk -v type="$qm_type" '$1 == "vdw" && $2 == type && $3 == type {print $5}' qm_non-bonded.dat)
+        if [[ -n "$c6_mm" && -n "$c6_qm" && -n "$c12_mm" && -n "$c12_qm" ]]; then
+            c6=$(echo "scale=10; sqrt($c6_mm * $c6_qm)" | bc -l)
+            c12=$(echo "scale=10; sqrt($c12_mm * $c12_qm)" | bc -l)
+            LC_NUMERIC=C printf "vdw %s %s %.4f %.4f\n" "$mm_type" "$qm_type" "$c6" "$c12" >> ff.dat
+        fi
+    done
+done
+
+# This defines parameters for MM calculation and most importantly atom types as combination types_qm_atoms and types from geometry file.
+# Alternatively atom types can be defined as types_qm_atoms and a multiplication of types_mm_atoms.
+if [ -n "$types_mm_atoms" ]; then
+    # Count number of residue form MMatom and length ov types_mm_atoms_all
+    length_residue=$(echo $types_mm_atoms | wc -w)
+    nresidue=$(echo $MMatom / $length_residue | bc)
+    # Create types_mm_atoms_all as a repetition of types_mm_atoms_all
+    types_mm_atoms_all=$(for i in $(seq 1 $nresidue); do echo -n "$types_mm_atoms "; done)
+else
+    types_mm_atoms_all=$(for atom in $(tail -$MMatom $geometry | awk '{print $1}'); do echo -n "${atom,      ,} "; done)
+fi
+
+dl_defs="{ mm_defs=ff.dat mxlist=10000 use_pairlist=no conn=geom.c atom_types= { $types_qm_atoms $types_mm_atoms_all } } " 
+
+
+cat > geom.com << EOF
+
+read_xyz file=$geometry coords=geom.c
+
+EOF
+
+cat > $input.com << EOF
+eandg energy=e gradient=g coords=geom.c \
+    theory= hybrid : { coupling=$embedding
+    qm_region= { $(seq  -s " " 1 $QMatom) }
+    qm_theory=$qm_theory
+    mm_theory=dl_poly : {$dl_defs}
     }
 
 EOF
-############# End of ChemShell input #################
+
+fi
+
+############ END OF DL_POLY INPUT #####################
+
+chemsh -s --no-xml-output  >& geom.com.out <geom.com
+
+natom4=`expr $natom + 4`
+connectNUM=` expr $[$natom - $QMatom] / 6 \* 5 + $extra_con`
+count=`expr $QMatom + 1`
+mv geom.c pom.dat
+head -n $natom4 pom.dat >> geom.c
+if [ $timestep -eq 0 ]; then
+echo "block = connectivity records = $connectNUM" > conn.dat
+while [ $count -le $natom ]; do
+        echo "$count $(echo "$count+1" | bc)" >> conn.dat
+        echo "$count $(echo "$count+2" | bc)" >> conn.dat
+        echo "$count $(echo "$count+3" | bc)" >> conn.dat
+        echo "$count $(echo "$count+4" | bc)" >> conn.dat
+        echo "$(echo "$count+1" | bc) $(echo "$count+5" | bc)" >> conn.dat
+        count=`expr $count + 6`
+
+done
+cat conn.dat >> geom.c
+else
+cat conn.dat >> geom.c
+fi
+
 #################### Launch ChemShell ####################
-chemsh -s --no-xml-output  >& $input.com.out <$input.com
 
+chemsh.x $input.com > $input.com.out
 
-st=1
-while [ $st -eq 1 ]; do
-psp=$(grep 'pspace,' molpro.com )
-psp=$(echo ${psp:7})
-        if $( grep -q 'GLOBAL ERROR fehler' molpro.out ) ;then
-                pom1=`echo "$psp == 0.4" | bc`
-                pom2=`echo "$psp == 1" | bc`
-                pom3=`echo "$psp == 5" | bc`
-                pom4=`echo "$psp == 20" | bc`
+if [[ $? -eq 1 ]];then
+    echo "Error in ChemShell. Check $input.com.out"
+elif $( grep -q grep 'error code 1' $input.com.out ) ;then
+    echo "Error in QM code."
+else
+    cp $input.com.out $input.com.out.old
+    cp g g.old
+    cp e e.old
+fi
 
-		echo $timestep >> pspace.log
-                if [ $pom1 -eq 1 ]; then
-                        echo '1' > pspace.setup
-                        sed 's/pspace,0.4/pspace,1/g' molpro.com > molpro.com.2
-                        mv molpro.com.2 molpro.com
-                        chemsh -s --no-xml-output  >& $input.com.out <$input.com
+##########################################################
 
-                elif [ $pom2 -eq 1 ]; then
-                        echo '5' > pspace.setup
-                       sed 's/pspace,1/pspace,5/g' molpro.com > molpro.com.2
-                        mv molpro.com.2 molpro.com
-                        chemsh -s --no-xml-output  >& $input.com.out <$input.com
-
-                elif [ $pom3 -eq 1 ]; then
-                        echo '20' > pspace.setup
-                        sed 's/pspace,5/pspace,20/g' molpro.com > molpro.com.2
-                        mv molpro.com.2 molpro.com
-                        chemsh -s --no-xml-output  >& $input.com.out <$input.com
-
-                elif [ $pom4 -eq 1 ]; then
-                        echo '100' > pspace.setup
-                        sed 's/pspace,20/pspace,100/g' molpro.com > molpro.com.2
-                        mv molpro.com.2 molpro.com
-                        chemsh -s --no-xml-output  >& $input.com.out <$input.com
-
-                else
-                        st=0
-                fi
-
-                cp $input.com.out $input.com.out.old
-                cp molpro.out molpro.out.old
-
-        else
-                st=0
-        fi
-done
-
-
-
-
-#######Ziskani sil a energii###############
-natom3=` expr $natom \* 3 `
-
-#- Extracting energy. This should work even for CASPT2 energies. 
-#from molpro output, Chemshell writes just one state
-
-MMenergy=$(grep 'dl_poly:' input001.com.out | awk '{print $6}')
-for i in `seq $nstate`; do
-        QMenergy=$(echo $(grep 'MCSCF' molpro.out| grep 'Energy' | awk -F "Energy" '{print $2}' | tail -n $nstate | head -n $i | tail -n 1))
-        QMMMenergy$i=$(echo "$QMenergy+$MMenergy" | bc)
-        echo $QMenergy >> ../engrad.dat.$ibead
-done
-
-echo " $timestep   $(grep 'QM/MM Energy' input001.com.out | awk '{ print $3 }') " >> ../QMMMenergy.dat
-
-
+#################### get energies and gradient ###############
+natom3=` expr $natom \* 3 `     
+                              
+MMenergy=$(grep 'dl_poly:' input001.com.out | awk '{print $6}')       
+for i in `seq $nstate`; do      
+      QMenergy=$(echo $(grep 'MCSCF' molpro.out| grep 'Energy' | awk -F "Energy" '{print $2}' | tail -n $nstate | head -n $i | tail -n 1))    
+      QMMMenergy$i=$(echo "$QMenergy+$MMenergy" | bc)    
+      echo $QMenergy >> ../engrad.dat.$ibead    
+done                            
+                              
+echo " $timestep   $(grep 'QM/MM Energy' input001.com.out | awk '{ print $3 }') " >> ../QMMMenergy.dat    
+                              
+                              
 paste <(sed -n '5~3p' g) <(sed -n '6~3p' g) <(sed -n '7~3p' g) >> ../engrad.dat.$ibead
-
-
-
-
