@@ -41,7 +41,6 @@ cat > unit_conn.dat << EOF
 1 3
 EOF
 
-
 ##################### NON-BONDED PARAMETERS FOR QM ATOMS ######################
 # Every row represents one atom type and its epsilon and sigma parameters.
 # Here units of kJ/mol and nm are expected.
@@ -52,7 +51,6 @@ nx 0.71128  0.325
 cx 0.276144 0.35
 hx 0.12552  0.25
 EOF
-
 #################### END OF USER INPUT ################
 
 # Get unique types for both sets
@@ -174,7 +172,6 @@ cat conn.dat >> geom.c
 else
 cat conn.dat >> geom.c
 fi
-
 #################### Launch ChemShell ####################
 
 chemsh.x $input.com > $input.com.out
@@ -192,7 +189,6 @@ fi
 ##########################################################
 
 #################### get energies and gradient ###############
-
 nwrite=$(awk -F"[! ,=\"']+" '{if($1=="nwrite")print $2}' ../input.in)
 pom=$(echo $timestep % $nwrite | bc)
 if [ $timestep -eq 1 ] && [ $nwrite -ne 1 ]; then
@@ -201,9 +197,9 @@ elif [ $nwrite -eq 1 ]; then
         if [ $timestep -eq 0 ]; then
                 printf "#Step \t PotentialQMMM \t PotentialMM \t PotentialQM \t  Kinetic \t Total\n" >> ../energiesQMMM.dat
         elif [ $timestep -eq 1 ]; then
-        grep 'QM/MM Energy' $input.com.out | awk '{ print $3 }'  > QMMMenergy.dat
-        grep 'energy from' $input.com.out | grep 'dl_poly' | awk '{ print $6 }' > MMenergy.dat
-        grep 'energy from' input001.com.out | grep 'mndo' | awk '{ print $6 }' > QMenergy.dat
+        grep 'QM/MM Energy' $input.com.out | awk '{ print $3 }' > QMMMenergy.dat
+        grep 'energy from' $input.com.out | head -2 | tail -1 | awk '{ print $6 }' > MMenergy.dat
+        grep 'energy from' $input.com.out | head -1 | awk '{ print $6 }' > QMenergy.dat
         else
         QMMM_pot_energy=$(cat QMMMenergy.dat)
         MM_pot_energy=$(cat MMenergy.dat)
@@ -213,8 +209,8 @@ elif [ $nwrite -eq 1 ]; then
         laststep=$(echo $timestep - 1 | bc)
         printf " $laststep \t $QMMM_pot_energy \t $MM_pot_energy \t $QM_pot_energy \t $Ekin \t $QMMM_tot_energy\n" >> ../energiesQMMM.dat
         grep 'QM/MM Energy' $input.com.out | awk '{ print $3 }' > QMMMenergy.dat
-        grep 'energy from' $input.com.out | grep 'dl_poly' | awk '{ print $6 }' > MMenergy.dat
-        grep 'energy from' input001.com.out | grep 'mndo' | awk '{ print $6 }' > QMenergy.dat
+        grep 'energy from' $input.com.out | head -2 | tail -1 | awk '{ print $6 }' > MMenergy.dat
+        grep 'energy from' $input.com.out | head -1 | awk '{ print $6 }' > QMenergy.dat
         fi
 else
         if [ $pom -eq 1 ]; then
@@ -227,8 +223,8 @@ else
         printf " $laststep \t $QMMM_pot_energy \t $MM_pot_energy \t $QM_pot_energy \t  $Ekin \t $QMMM_tot_energy\n" >> ../energiesQMMM.dat
         elif [ $pom -eq 0 ]; then
         grep 'QM/MM Energy' $input.com.out | awk '{ print $3 }' > QMMMenergy.dat
-        grep 'energy from' $input.com.out | grep 'dl_poly' | awk '{ print $6 }' > MMenergy.dat
-        grep 'energy from' input001.com.out | grep 'mndo' | awk '{ print $6 }' > QMenergy.dat
+        grep 'energy from' $input.com.out | head -2 | tail -1 | awk '{ print $6 }' > MMenergy.dat
+        grep 'energy from' $input.com.out | head -1 | awk '{ print $6 }' > QMenergy.dat
         fi
 
 fi

@@ -51,6 +51,7 @@ EOF
 # Every row represents one atom type and its epsilon and sigma parameters.
 # Here units of kJ/mol and nm are expected.
 # These parameters will be transformed and added to dl_poly input file ff.dat. Pair rules will be applied on them and on those found in ff.dat.
+# THIS INTERFACE HAS AN EXAMPLE OF HYDROGEN PEROXIDE IN FLEXIBLE SPC WATER FROM  https://doi.org/10.1063/1.2136877
 cat > non_bonded.dat << EOF
 ox 2.4058  0.2912
 hx 0.527184 0.1852
@@ -157,6 +158,8 @@ for mm_type in "${unique_mm_types[@]}"; do
     done
 done
 
+fi
+
 # This defines parameters for MM calculation and most importantly atom types as combination types_qm_atoms and types from geometry file.
 # Alternatively atom types can be defined as types_qm_atoms and a multiplication of types_mm_atoms.
 if [ -n "$types_mm_atoms" ]; then
@@ -184,8 +187,6 @@ eandg energy=e gradient=g coords=geom.c \
     }
 
 EOF
-
-fi
 
 ############ END OF DL_POLY INPUT #####################
 
@@ -233,15 +234,50 @@ fi
 ##########################################################
 
 #################### get energies and gradient ###############
-natom3=` expr $natom \* 3 `     
-                              
-MMenergy=$(grep 'dl_poly:' input001.com.out | awk '{print $6}')       
-for i in `seq $nstate`; do      
-      QMenergy=$(echo $(grep 'MCSCF' molpro.out| grep 'Energy' | awk -F "Energy" '{print $2}' | tail -n $nstate | head -n $i | tail -n 1))    
-      QMMMenergy$i=$(echo "$QMenergy+$MMenergy" | bc)    
-      echo $QMenergy >> ../engrad.dat.$ibead    
-done                            
+nwrite=$(awk -F"[! ,=\"']+" '{if($1=="nwrite")print $2}' ../input.in)
+pom=$(echo $timestep % $nwrite | bc)
+if [ $timestep -eq 1 ] && [ $nwrite -ne 1 ]; then
+        printf "Step \t Potential \t  Kinetic \t Total\n" >> ../energiesQMMM.dat
+elif [ $nwrite -eq 1 ]; then
+        if [ $timestep -eq 0 ]; then
+                printf "#Step \t PotentialQMMM \t PotentialMM \t PotentialQM \t  Kinetic \t Total\n" >> ../energiesQMMM.dat
+        elif [ $timestep -eq 1 ]; then
+        grep 'QM/MM Energy' $input.com.out | awk '{ print $3 }' > QMMMenergy.dat
+        grep 'energy from' $input.com.out | head -2 | tail -1 | awk '{ print $6 }' > MMenergy.dat
+        grep 'energy from' $input.com.out | head -1 | awk '{ print $6 }' > QMenergy.dat
+        else
+        QMMM_pot_energy=$(cat QMMMenergy.dat)
+        MM_pot_energy=$(cat MMenergy.dat)
+        QM_pot_energy=$(cat QMenergy.dat)
+            Ekin=$(awk '{ print $3}' ../energies.dat | tail -1)
+            QMMM_tot_energy=$(echo $QMMM_pot_energy + $Ekin | bc)
+        laststep=$(echo $timestep - 1 | bc)
+        printf " $laststep \t $QMMM_pot_energy \t $MM_pot_energy \t $QM_pot_energy \t $Ekin \t $QMMM_tot_energy\n" >> ../energiesQMMM.dat
+        grep 'QM/MM Energy' $input.com.out | awk '{ print $3 }' > QMMMenergy.dat
+        grep 'energy from' $input.com.out | head -2 | tail -1 | awk '{ print $6 }' > MMenergy.dat
+        grep 'energy from' $input.com.out | head -1 | awk '{ print $6 }' > QMenergy.dat
+        fi
+else
+        if [ $pom -eq 1 ]; then
+        QMMM_pot_energy=$(cat QMMMenergy.dat)
+        MM_pot_energy=$(cat MMenergy.dat)
+        QM_pot_energy=$(cat QMenergy.dat)
+            Ekin=$(awk '{ print $3}' ../energies.dat | tail -1)
+            QMMM_tot_energy=$(echo $QMMM_pot_energy + $Ekin | bc)
+        laststep=$(echo $timestep - 1 | bc)
+        printf " $laststep \t $QMMM_pot_energy \t $MM_pot_energy \t $QM_pot_energy \t  $Ekin \t $QMMM_tot_energy\n" >> ../energiesQMMM.dat
+        elif [ $pom -eq 0 ]; then
+        grep 'QM/MM Energy' $input.com.out | awk '{ print $3 }' > QMMMenergy.dat
+        grep 'energy from' $input.com.out | head -2 | tail -1 | awk '{ print $6 }' > MMenergy.dat
+        grep 'energy from' $input.com.out | head -1 | awk '{ print $6 }' > QMenergy.dat
+        fi
 
-echo " $timestep   $(grep 'QM/MM Energy' input001.com.out | awk '{ print $3 }') " >> ../QMMMenergy.dat    
+fi
+
+MMenergy=$(grep 'dl_poly:' input001.com.out | awk '{print $6}')
+for i in `seq $nstate`; do
+        QMenergy=$(echo $(grep 'MCSCF' molpro.out| grep 'Energy' | awk -F "Energy" '{print $2}' | tail -n $nstate | head -n $i | tail -n 1))
+        echo $QMenergy >> ../engrad.dat.$ibead
+done
 
 paste <(sed -n '5~3p' g) <(sed -n '6~3p' g) <(sed -n '7~3p' g) >> ../engrad.dat.$ibead
