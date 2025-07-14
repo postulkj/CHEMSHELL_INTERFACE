@@ -1,15 +1,9 @@
 #!/bin/bash
 
 #ChemShell
-export LIBTCL=/home/postulka/programs/chemshell/tcl8.5.19/lib/libtcl8.5.so
-export PATH=/home/postulka/programs/chemshell/tcl8.5.19/bin:$PATH
-export PATH=/home/postulka/programs/chemshell/chemsh-tcl-3.7.1-int8/scripts:$PATH
-export PATH=/home/postulka/programs/chemshell/chemsh-tcl-3.7.1-int8/bin:$PATH
-export TCLROOT=/home/postulka/programs/chemshell/tcl8.5.19/build
-export TCLLIBPATH=/home/postulka/programs/chemshell/chemsh-tcl-3.7.1-int8/tcl
-export LD_LIBRARY_PATH=/home/postulka/programs/chemshell/tcl8.5.19/build/lib:$LD_LIBRARY_PATH
+source SetEnvironment.sh CHEMSHELL
 
-#MNDO
+#QM Progam
 source SetEnvironment.sh MNDO
 source SetEnvironment.sh ORCA 5.0.3
 
@@ -22,15 +16,15 @@ geometry=../geom.dat.$ibead
 
 
 #################### USER INPUT #######################
-QMatom=4               # Number of QM atoms
+QMatom=24               # Number of QM atoms
 extra_con=0             # Extra conectivity entries 
 hamiltonian="mndo"       # QM method
 basis="cc-pVDZ"     
 charge=0
 mult=1
 embedding="shift"       #shift for electrostatic embedding
-types_qm_atoms="ox ox hx hx"
-types_mm_atoms="o h h"
+types_qm_atoms="nx nx cx cx cx cx cx cx cx hx hx hx hx hx cx cx cx cx cx hx hx hx hx hx"
+types_mm_atoms="c o h h h ho"
 qm_theory="mndo: { executable=$MNDOEXE hamiltonian=$hamiltonian charge=$charge mult=$mult }"
 #qm_theory="orca: { executable=$ORCAEXE version=5.0 hamiltonian=dft functional=$hamiltonian charge=$charge mult=$mult }"
 
@@ -39,6 +33,9 @@ qm_theory="mndo: { executable=$MNDOEXE hamiltonian=$hamiltonian charge=$charge m
 cat > unit_conn.dat << EOF
 1 2
 1 3
+1 4
+1 5
+2 6
 EOF
 
 ##################### NON-BONDED PARAMETERS FOR QM ATOMS ######################
@@ -74,14 +71,20 @@ for qm_type in "${unique_qm_types[@]}"; do
 done
 
 cat >> ff.dat << EOF
-charge o -.82
-charge h +.41
+declare ho
 
-vdw  o o  625.502 629327.0
-vdw  o h  0.0 0.0
-vdw  h h  0.0 0.0
-bond h  o     1059.162 1.012
-angle h o h   75.90 113.24
+charge  c   +.145
+charge  h   +.04
+charge  o   -.683
+charge  ho  +.418
+charge  n   -.460
+
+vdw     c c     485.30       892114.23
+vdw     h h     29.30        7152.56
+vdw     o o     627.24       578580.84
+vdw     ho ho   0.0          0.0
+vdw     n  n    801.33       944298.39
+
 EOF
 
 # Transform non-bonded parameters to dl_poly format
@@ -145,7 +148,7 @@ EOF
 
 ############ END OF DL_POLY INPUT #####################
 
-chemsh -s --no-xml-output  >& geom.com.out <geom.com
+$CHEMSHELLEXE -s --no-xml-output  >& geom.com.out <geom.com
 
 # test if unit_conn.dat exists and conn.dat does not: create the conn.dat in that case from it
 if [ ! -f conn.dat ] && [ -f unit_conn.dat ]; then
@@ -174,7 +177,7 @@ cat conn.dat >> geom.c
 fi
 #################### Launch ChemShell ####################
 
-chemsh.x $input.com > $input.com.out
+$CHEMSHELLEXE $input.com > $input.com.out
 
 if [[ $? -eq 1 ]];then
     echo "Error in ChemShell. Check $input.com.out"

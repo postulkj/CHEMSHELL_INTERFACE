@@ -1,17 +1,11 @@
 #!/bin/bash
 
 #ChemShell
-export LIBTCL=/home/postulka/programs/chemshell/tcl8.5.19/lib/libtcl8.5.so
-export PATH=/home/postulka/programs/chemshell/tcl8.5.19/bin:$PATH
-export PATH=/home/postulka/programs/chemshell/chemsh-tcl-3.7.1-int8/scripts:$PATH
-export PATH=/home/postulka/programs/chemshell/chemsh-tcl-3.7.1-int8/bin:$PATH
-export TCLROOT=/home/postulka/programs/chemshell/tcl8.5.19/build
-export TCLLIBPATH=/home/postulka/programs/chemshell/chemsh-tcl-3.7.1-int8/tcl
-export LD_LIBRARY_PATH=/home/postulka/programs/chemshell/tcl8.5.19/build/lib:$LD_LIBRARY_PATH
+source SetEnvironment.sh CHEMSHELL
 
-#MNDO
-source SetEnvironment.sh MNDO
-source SetEnvironment.sh ORCA 5.0.3
+#QM progam
+#source SetEnvironment.sh MNDO
+#source SetEnvironment.sh ORCA 5.0.3
 source SetEnvironment.sh MOLPRO 2024
 
 cd CHEMSH-LZ
@@ -190,7 +184,7 @@ EOF
 
 ############ END OF DL_POLY INPUT #####################
 
-chemsh -s --no-xml-output  >& geom.com.out <geom.com
+$CHEMSHELLEXE -s --no-xml-output  >& geom.com.out <geom.com
 
 # test if unit_conn.dat exists and conn.dat does not: create the conn.dat in that case from it
 if [ ! -f conn.dat ] && [ -f unit_conn.dat ]; then
@@ -219,7 +213,7 @@ cat conn.dat >> geom.c
 fi
 #################### Launch ChemShell ####################
 
-chemsh.x $input.com > $input.com.out
+$CHEMSHELLEXE $input.com > $input.com.out
 
 if [[ $? -eq 1 ]];then
     echo "Error in ChemShell. Check $input.com.out"
