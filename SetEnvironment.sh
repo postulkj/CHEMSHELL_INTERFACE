@@ -75,13 +75,13 @@ fi
 SCRDIR_BASE="/scratch/$USER/"
 
 if [[ $cluster = "as67" ]];then
-   PROGRAMS=(ABIN AMBER CP2K DFTB GAUSSIAN GROMACS MOLPRO MOPAC OCTOPUS ORCA QCHEM)
+   PROGRAMS=(ABIN AMBER CHEMSHELL CP2K DFTB GAUSSIAN GROMACS MOLPRO MOPAC OCTOPUS ORCA QCHEM )
 elif [[ $cluster = "a324" ]];then
    PROGRAMS=(ABIN AMBER CP2K DALTON DFTB GAUSSIAN GROMACS MNDO MOLPRO MOPAC NWCHEM OCTOPUS ORCA QCHEM SHARC TERACHEM )
 elif [[ $cluster = "as67gpu" ]];then
-   PROGRAMS=(ABIN AMBER CP2K DALTON DFTB GAUSSIAN GROMACS MNDO MOLPRO MOPAC NWCHEM OCTOPUS ORCA QCHEM TERACHEM FANOCI)
+   PROGRAMS=(ABIN AMBER CHEMSHELL CP2K DALTON DFTB GAUSSIAN GROMACS MNDO MOLPRO MOPAC NWCHEM OCTOPUS ORCA QCHEM TERACHEM FANOCI)
 elif [[ $cluster = "as67kr" ]];then
-   PROGRAMS=(ABIN DALTON DFTB GAUSSIAN MOLPRO MNDO ORCA TERACHEM QCHEM BAGEL)
+   PROGRAMS=(ABIN CHEMSHELL DALTON DFTB GAUSSIAN MOLPRO MNDO ORCA TERACHEM QCHEM BAGEL)
 fi
 
 basedir=/usr/local/programs
@@ -111,7 +111,7 @@ if [[ $available = "False" ]];then
 fi
 
 # declaration of associative BASH arrays
-declare -A ABIN DALTON NWCHEM OCTOPUS GROMACS ORCA CP2K MOLPRO MOLPRO_MPI GAUSS DFTB TERA MOPAC MNDO SHARCH QCHEM QCHEM_MPI
+declare -A ABIN DALTON NWCHEM OCTOPUS GROMACS ORCA CP2K MOLPRO MOLPRO_MPI GAUSS DFTB TERA MOPAC MNDO SHARCH QCHEM QCHEM_MPI CHEMSHELL
 
 
 case "$program" in
@@ -234,29 +234,26 @@ case "$program" in
       
       ;;
    "CHEMSHELL" )
-      if [[ $cluster = "as67" ]];then
+      if [[ $cluster = "as67gpu" ]] || [[ $cluster = "as67" ]];then
          VERSIONS=( 3.7.1 )
       elif [[ $cluster = "as67kr" ]];then
-         VERSIONS=( 3.7.1 )
-      else
          VERSIONS=( 3.7.1 )
       fi
-      if [[ $cluster = "as67" ]];then
-         CHEMSHELL[3.7.1]="$basedir_custom/chemshell/chemshell-3.7.1/bin/chemshell"
+      if [[ $cluster = "as67gpu" ]] || [[ $cluster = "as67" ]];then
+        export TCLROOT=/usr/local/programs/custom/chemshell/tcl8.5.19/unix/build/
+        export CHEMSHROOT=/usr/local/programs/custom/chemshell/chemsh-tcl-3.7.1
       elif [[ $cluster = "as67kr" ]];then
-        export LIBTCL=/home/postulka/programs/chemshell/tcl8.5.19/lib/libtcl8.5.so
-        export PATH=/home/postulka/programs/chemshell/tcl8.5.19/bin:$PATH
-        export PATH=/home/postulka/programs/chemshell/chemsh-tcl-3.7.1-int8/scripts:$PATH
-export PATH=/home/postulka/programs/chemshell/chemsh-tcl-3.7.1-int8/bin:$PATH
-export TCLROOT=/home/postulka/programs/chemshell/tcl8.5.19/build
-export TCLLIBPATH=/home/postulka/programs/chemshell/chemsh-tcl-3.7.1-int8/tcl
-export LD_LIBRARY_PATH=/home/postulka/programs/chemshell/tcl8.5.19/build/lib:$LD_LIBRARY_PATH
+        export TCLROOT=/home/postulka/programs/chemshell/tcl8.5.19/build
+        export CHEMSHROOT=/home/postulka/programs/chemshell/chemsh-tcl-3.7.1-int8
+      fi
+      export PATH=$TCLROOT/bin:$PATH                                                                                                   
+      export LIBTCL=$TCLROOT/lib/libtcl8.5.so
+      export LD_LIBRARY_PATH=$TCLROOT/lib:$LD_LIBRARY_PATH
+      export PATH=$CHEMSHROOT/bin:$PATH
+      export PATH=$CHEMSHROOT/scripts:$PATH
+      export TCLLIBPATH=$CHEMSHROOT/tcl
 
-         CHEMSHELL[3.7.1]="$basedir_custom/chemshell/chemshell-3.7.1/bin/chemshell"
-      else
-         CHEMSHELL[3.7.1]="$basedir_custom/chemshell/chemshell-3.7.1/bin/chemshell"
-      fi
-      export CHEMSHELLEXE=${CHEMSHELL[$version]}
+      export CHEMSHELLEXE=${CHEMSHROOT}/bin/chemsh.x
       ;;
    "GAUSSIAN" )
       if [[ $cluster = "as67" ]];then
