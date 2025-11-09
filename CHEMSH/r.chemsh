@@ -1,11 +1,7 @@
 #!/bin/bash
 
-#ChemShell
-source SetEnvironment.sh CHEMSHELL
-
-#QM Progam
-source SetEnvironment.sh MNDO
-source SetEnvironment.sh ORCA 5.0.3
+#This script is used to run QM/MM calculations with ChemShell.
+#Requred qm programs like MNDO or ORCA have to be source to run it in chemshell environment.
 
 cd CHEMSH
 timestep=$1
@@ -14,39 +10,15 @@ input=input$ibead
 natom=$(wc -l ../geom.dat.$ibead) && natom=$(echo "${natom%% *}")
 geometry=../geom.dat.$ibead
 
-
+source chemsh.inp
 #################### USER INPUT #######################
-QMatom=24            # Number of QM atoms
-hamiltonian="mndo"      # QM method
-basis="cc-pVDZ"    
-charge=0
-mult=1
-embedding="shift"      #shift for electrostatic embedding
-types_qm_atoms="nx nx cx cx cx cx cx cx cx hx hx hx hx hx cx cx cx cx cx hx hx hx hx hx"
-types_mm_atoms="c o h h h ho"
-qm_theory="mndo: { executable=$MNDOEXE hamiltonian=$hamiltonian charge=$charge mult=$mult }"
-#qm_theory="orca: { executable=$ORCAEXE version=5.0 hamiltonian=dft functional=$hamiltonian charge=$charge mult=$mult }"
+#test which qm_code is used, mndo or orca
+if [ "$qm_code" == "mndo" ]; then
+    qm_theory="mndo: { executable=$MNDOEXE hamiltonian=$hamiltonian charge=$charge mult=$mult }"
+elif [ "$qm_code" == "orca" ]; then
+    qm_theory="orca: { executable=$ORCAEXE version=5.0 hamiltonian=dft functional=$hamiltonian basis=$basis charge=$charge mult=$mult maxcyc=1000 }"
+fi
 
-# Definition of connectivity in MM subunit.
-# User can also create conn.dat file for whole system and this will be ignored in that case. File conn.dat has to include the head line with number of connections. See manual or pre  defined geom.c file.
-cat > unit_conn.dat << EOF
-1 2
-1 3
-1 4
-1 5
-2 6
-EOF
-
-##################### NON-BONDED PARAMETERS FOR QM ATOMS ######################
-# Every row represents one atom type and its epsilon and sigma parameters.
-# Here units of kJ/mol and nm are expected.
-# These parameters will be transformed and added to dl_poly input file ff.dat. Pair rules will be applied on them and on those found in ff.dat.
-# THIS INTERFACE USES AN EXAMPLE OF AZOBENZENE IN METHANOL FROM OPLS-FF
-cat > non_bonded.dat << EOF
-nx 0.71128  0.325
-cx 0.276144 0.35
-hx 0.12552  0.25
-EOF
 #################### END OF USER INPUT ################
 
 # Get unique types for both sets
@@ -64,27 +36,13 @@ nresidue=$(echo $MMatom / $length_residue | bc)
 
 ############ DL_POLY INPUT  ###################
 
-if [ ! -f ff.dat ]; then
-for qm_type in "${unique_qm_types[@]}"; do
-   echo "declare $qm_type" >> ff.dat
+if [ ! -f ff.dat ]; then                                                                                           
+for qm_type in "${unique_qm_types[@]}"; do                                                                         
+   echo "declare $qm_type" >> ff_pom.dat                                                                                                                                               
 done
 
-cat >> ff.dat << EOF
-declare ho
-
-charge  c   +.145
-charge  h   +.04
-charge  o   -.683
-charge  ho  +.418
-charge  n   -.460
-
-vdw    c c    485.30      892114.23
-vdw    h h    29.30      7152.56
-vdw    o o    627.24      578580.84
-vdw    ho ho   0.0        0.0
-vdw    n  n   801.33      944298.39
-
-EOF
+cat init_ff.dat >> ff_pom.dat
+mv ff_pom.dat ff.dat
 
 # Transform non-bonded parameters to dl_poly format
 while read -r line; do
@@ -147,7 +105,7 @@ EOF
 
 ############ END OF DL_POLY INPUT #####################
 
-$CHEMSHELLEXE -s --no-xml-output  >& geom.com.out <geom.com
+$CHEMSHELLEXE  >& geom.com.out <geom.com
 
 # test if unit_conn.dat exists and conn.dat does not: create the conn.dat in that case from it
 if [ ! -f conn.dat ] && [ -f unit_conn.dat ]; then
@@ -177,12 +135,12 @@ fi
 #################### Launch ChemShell ####################
 
 $CHEMSHELLEXE $input.com > $input.com.out
-
-if [[ $? -eq 1 ]];then
-   echo "Error in ChemShell. Check $input.com.out"
-elif $( grep -q grep 'error code 1' $input.com.out ) ;then
-   echo "Error in QM code."
-else
+if [[ $? -ne 0 ]]; then
+    echo "Error in ChemShell. Check $input.com.out"
+    exit 2
+    elif $( grep -q grep 'error code 1' $input.com.out ) ;then
+echo "Error in QM code."
+    exit 2
    cp $input.com.out $input.com.out.old
    cp g g.old
    cp e e.old
